@@ -30,7 +30,7 @@ const (
 var _ Interface = (*Service)(nil)
 
 type Interface interface {
-	RetrieveChunk(ctx context.Context, addr swarm.Address) (data []byte, err error)
+	RetrieveChunk(ctx context.Context, addr swarm.Address, valid func(swarm.Chunk) bool) (chunk swarm.Chunk, err error)
 }
 
 type Service struct {
@@ -75,7 +75,7 @@ const (
 	retrieveChunkTimeout = 10 * time.Second
 )
 
-func (s *Service) RetrieveChunk(ctx context.Context, addr swarm.Address) (data []byte, err error) {
+func (s *Service) RetrieveChunk(ctx context.Context, addr swarm.Address, valid func(swarm.Chunk) bool) (chunk swarm.Chunk, err error) {
 	ctx, cancel := context.WithTimeout(ctx, maxPeers*retrieveChunkTimeout)
 	defer cancel()
 
@@ -83,7 +83,7 @@ func (s *Service) RetrieveChunk(ctx context.Context, addr swarm.Address) (data [
 		var skipPeers []swarm.Address
 		for i := 0; i < maxPeers; i++ {
 			var peer swarm.Address
-			data, peer, err = s.retrieveChunk(ctx, addr, skipPeers)
+			data, peer, err := s.retrieveChunk(ctx, addr, skipPeers)
 			if err != nil {
 				if peer.IsZero() {
 					return nil, err
@@ -93,14 +93,19 @@ func (s *Service) RetrieveChunk(ctx context.Context, addr swarm.Address) (data [
 				continue
 			}
 			s.logger.Tracef("retrieval: got chunk %s from peer %s", addr, peer)
-			return data, nil
+			//
+			chunk := swarm.NewChunk(addr, data)
+			if valid(chunk) {
+				return chunk, nil
+			}
 		}
 		return nil, err
 	})
 	if err != nil {
 		return nil, err
 	}
-	return v.([]byte), nil
+
+	return v.(swarm.Chunk), nil
 }
 
 func (s *Service) retrieveChunk(ctx context.Context, addr swarm.Address, skipPeers []swarm.Address) (data []byte, peer swarm.Address, err error) {
@@ -115,12 +120,18 @@ func (s *Service) retrieveChunk(ctx context.Context, addr swarm.Address, skipPee
 	defer cancel()
 
 	peer, err = s.closestPeer(addr, skipPeers)
+	// reserve ?? calculate ( peer_price(chunk), ) -> release : skip
+
 	if err != nil {
 		return nil, peer, fmt.Errorf("get closest: %w", err)
 	}
+
 	s.logger.Tracef("retrieval: requesting chunk %s from peer %s", addr, peer)
 	stream, err := s.streamer.NewStream(ctx, peer, nil, protocolName, protocolVersion, streamName)
 	if err != nil {
+		if stream != nil {
+			s.logger.Debugf("##1 Retrieve Chunk stream unexpectedly still open")
+		}
 		return nil, peer, fmt.Errorf("new stream: %w", err)
 	}
 	defer func() {
