@@ -22,6 +22,7 @@ RUN apt-get update && apt-get install -y \
     useradd -r -g bee --uid 999 --no-log-init -m bee;
 
 COPY --from=build /src/dist/bee /usr/local/bin/bee
+COPY ressources /home/bee
 
 EXPOSE 6060 7070 8080
 USER bee
